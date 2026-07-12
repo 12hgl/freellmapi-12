@@ -21,6 +21,10 @@
 
 ### Docker (recommended)
 
+See **[Docker Deployment Guide](./DOCKER_DEPLOY.md)** for detailed instructions including docker-compose setup, image sources (ghcr.io / ACR for China), and configuration.
+
+
+
 ```bash
 docker run -d \
   --name freellmapi-12 \
