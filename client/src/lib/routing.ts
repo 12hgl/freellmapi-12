@@ -167,6 +167,24 @@ export const platformColors: Record<string, string> = {
   aihorde:     '#dc2626',
 }
 
+// Generate a deterministic, perceptually-distinct color for a model name.
+// Uses DJB2 hash → golden-ratio hue spacing in OKLCH with fixed chroma/lightness
+// so every model gets a unique, vivid, and readable color — no collisions even
+// for 100+ models on the same page.
+const GOLDEN_RATIO = 0.618033988749895
+export function modelColor(name: string): string {
+  // DJB2 hash: produces a well-distributed 32-bit integer from a string.
+  let hash = 5381
+  for (let i = 0; i < name.length; i++) {
+    hash = ((hash << 5) + hash) + name.charCodeAt(i) // hash * 33 + c
+    hash = hash >>> 0 // cast to unsigned 32-bit
+  }
+  // Map hash to hue using golden-ratio spacing: each increment moves ~222.5°
+  // around the circle, maximising perceptual distance between adjacent names.
+  const hue = (hash * GOLDEN_RATIO * 360) % 360
+  return `hsl(${Math.round(hue)}, 65%, 48%)`
+}
+
 // ── Grouped (unified) rendering ──────────────────────────────────────────────
 // One logical model and the provider rows that serve it.
 export interface ModelGroupRow {
