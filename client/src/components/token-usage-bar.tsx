@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { useI18n } from '@/i18n'
-import { formatPercent, formatTokens, platformColors, type TokenUsageData } from '@/lib/routing'
+import { formatPercent, formatTokens, modelColor, type TokenUsageData } from '@/lib/routing'
 
 // Legend rows visible while collapsed (~6 rows: 6 × 16px line + 5 × 6px gap).
 const LEGEND_COLLAPSED_PX = 126
@@ -66,7 +66,7 @@ export function TokenUsageBar({ data }: { data: TokenUsageData }) {
             title={`${m.displayName} (${m.platform}): ${formatTokens(m.remainingTokens)} ${t('models.remaining')}, ${formatTokens(m.usedTokens)} ${t('models.used')}`}
             style={{
               width: `${m.widthPct}%`,
-              backgroundColor: platformColors[m.platform] ?? '#94a3b8',
+              backgroundColor: modelColor(m.displayName),
             }}
           />
         ))}
@@ -89,7 +89,7 @@ export function TokenUsageBar({ data }: { data: TokenUsageData }) {
             <div key={i} className="flex items-center gap-2 min-w-0">
               <span
                 className="size-2 rounded-sm flex-shrink-0"
-                style={{ backgroundColor: platformColors[m.platform] ?? '#94a3b8' }}
+                style={{ backgroundColor: modelColor(m.displayName) }}
               />
               <span className="truncate">{m.displayName}</span>
               <span className="flex-1" />
