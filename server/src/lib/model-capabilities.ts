@@ -16,11 +16,14 @@
  * later in the model settings panel.
  */
 
+export type ModelType = 'chat' | 'embedding' | 'image' | 'audio';
+
 export interface ModelCapability {
   supportsTools: boolean;
   supportsVision: boolean;
   intelligenceRank: number;
   speedRank: number;
+  type: ModelType;
 }
 
 /**
@@ -47,17 +50,33 @@ interface ModelOverride {
 // Higher intelligence → higher MMLU / Arena ELO / reasoning.
 // Higher speed → fewer params / flash variants / CPU-friendly.
 
-const TIER_S: ModelCapability = { supportsTools: true, supportsVision: false, intelligenceRank: 90, speedRank: 10 };
-const TIER_A: ModelCapability = { supportsTools: true, supportsVision: false, intelligenceRank: 82, speedRank: 20 };
-const TIER_B: ModelCapability = { supportsTools: true, supportsVision: false, intelligenceRank: 72, speedRank: 40 };
-const TIER_C: ModelCapability = { supportsTools: true, supportsVision: false, intelligenceRank: 62, speedRank: 60 };
-const TIER_D: ModelCapability = { supportsTools: true, supportsVision: false, intelligenceRank: 52, speedRank: 75 };
-const TIER_E: ModelCapability = { supportsTools: false, supportsVision: false, intelligenceRank: 42, speedRank: 88 };
+const CHAT = 'chat' as ModelType;
+const EMBED = 'embedding' as ModelType;
+const IMAGE = 'image' as ModelType;
+const AUDIO = 'audio' as ModelType;
+
+const TIER_S: ModelCapability = { type: CHAT, supportsTools: true, supportsVision: false, intelligenceRank: 90, speedRank: 10 };
+const TIER_A: ModelCapability = { type: CHAT, supportsTools: true, supportsVision: false, intelligenceRank: 82, speedRank: 20 };
+const TIER_B: ModelCapability = { type: CHAT, supportsTools: true, supportsVision: false, intelligenceRank: 72, speedRank: 40 };
+const TIER_C: ModelCapability = { type: CHAT, supportsTools: true, supportsVision: false, intelligenceRank: 62, speedRank: 60 };
+const TIER_D: ModelCapability = { type: CHAT, supportsTools: true, supportsVision: false, intelligenceRank: 52, speedRank: 75 };
+const TIER_E: ModelCapability = { type: CHAT, supportsTools: false, supportsVision: false, intelligenceRank: 42, speedRank: 88 };
 
 // Vision tiers — all have supportsVision: true, tools vary.
-const TIER_VISION_A: ModelCapability = { supportsTools: true, supportsVision: true, intelligenceRank: 82, speedRank: 18 };
-const TIER_VISION_B: ModelCapability = { supportsTools: true, supportsVision: true, intelligenceRank: 70, speedRank: 35 };
-const TIER_VISION_C: ModelCapability = { supportsTools: false, supportsVision: true, intelligenceRank: 55, speedRank: 55 };
+const TIER_VISION_A: ModelCapability = { type: CHAT, supportsTools: true, supportsVision: true, intelligenceRank: 82, speedRank: 18 };
+const TIER_VISION_B: ModelCapability = { type: CHAT, supportsTools: true, supportsVision: true, intelligenceRank: 70, speedRank: 35 };
+const TIER_VISION_C: ModelCapability = { type: CHAT, supportsTools: false, supportsVision: true, intelligenceRank: 55, speedRank: 55 };
+
+// Embedding tiers
+const TIER_EMBED_A: ModelCapability = { type: EMBED, supportsTools: false, supportsVision: false, intelligenceRank: 40, speedRank: 70 };
+const TIER_EMBED_B: ModelCapability = { type: EMBED, supportsTools: false, supportsVision: false, intelligenceRank: 30, speedRank: 85 };
+
+// Image generation tiers
+const TIER_IMAGE_A: ModelCapability = { type: IMAGE, supportsTools: false, supportsVision: false, intelligenceRank: 60, speedRank: 30 };
+const TIER_IMAGE_B: ModelCapability = { type: IMAGE, supportsTools: false, supportsVision: false, intelligenceRank: 45, speedRank: 50 };
+
+// Audio tiers
+const TIER_AUDIO_A: ModelCapability = { type: AUDIO, supportsTools: false, supportsVision: false, intelligenceRank: 50, speedRank: 50 };
 
 // ── Exact model overrides (checked first) ────────────────────────────────
 const MODEL_OVERRIDES: ModelOverride[] = [
@@ -360,11 +379,60 @@ const FAMILY_RULES: FamilyRule[] = [
 
 // ── Default fallback for unknown models ──
 const DEFAULT_CAPABILITY: ModelCapability = {
-  supportsTools: true,    // Modern OpenAI-compatible servers default to tools on
-  supportsVision: false,  // Vision is opt-in — only pattern-matched models get it
-  intelligenceRank: 50,   // Midpoint — user can adjust
-  speedRank: 50,          // Midpoint
+  type: CHAT,
+  supportsTools: true,
+  supportsVision: false,
+  intelligenceRank: 50,
+  speedRank: 50,
 };
+
+/**
+ * Infer model type from the model ID based on naming conventions.
+ */
+export function inferModelType(modelId: string): ModelType {
+  const lower = modelId.toLowerCase().trim();
+  if (!lower) return 'chat';
+
+  // Embedding-specific tokens
+  const embedTokens = ['embed', 'bge-', 'bge_', 'gte-', 'e5-', 'stella', 'jina-embed', 'mxbai', 'nomic-embed', 'all-minilm', 'all-mpnet', 'multilingual-e5'];
+  if (embedTokens.some(t => lower.includes(t))) return 'embedding';
+
+  // Image-specific tokens
+  const imageTokens = ['dall-e', 'dalle', 'stable-diffusion', 'flux', 'midjourney', 'sdxl', 'image-gen', '.image', '-image'];
+  if (imageTokens.some(t => lower.includes(t))) return 'image';
+
+  // Audio-specific tokens
+  const audioTokens = ['whisper', 'tts-', 'tts_', 'speech', 'audio', 'bark-', 'parler'];
+  if (audioTokens.some(t => lower.includes(t))) return 'audio';
+
+  return 'chat';
+}
+
+/**
+ * Strip commonly used vendor/model-provider prefixes from display names.
+ * E.g. "deepseek-ai/DeepSeek-V3.2" → "DeepSeek-V3.2"
+ */
+export function stripVendorPrefix(modelId: string): string {
+  const idx = modelId.indexOf('/');
+  if (idx >= 0 && idx < modelId.length - 1) {
+    const prefix = modelId.substring(0, idx).toLowerCase();
+    // Known provider namespaces commonly used on HuggingFace / OpenRouter
+    const knownPrefixes = new Set([
+      'deepseek-ai', 'meta-llama', 'qwen', 'mistralai', 'microsoft',
+      'google', 'anthropic', 'openai', 'cohere', 'nvidia', 'tiiuae',
+      'upstage', '01-ai', 'baichuan', 'internlm', 'thudm', 'xverse',
+      'openbmb', 'opencsg', 'lingodot', 'nousresearch', 'cognitivecomputations',
+      'teknium', 'garage-baind', 'mlabonne', 'thebloke', 'bartowski',
+      'mradermacher', 'unsloth', 'lmstudio-community', 'second-state',
+      'xinference', 'vllm', 'sglang', 'ollama',
+      'i1c', 'musepublic', 'pro', 'huggingface',
+    ]);
+    if (knownPrefixes.has(prefix)) {
+      return modelId.substring(idx + 1);
+    }
+  }
+  return modelId;
+}
 
 /**
  * Look up capabilities for a model by its ID.
@@ -390,15 +458,20 @@ export function lookupModelCapability(modelId: string): ModelCapability {
     return { ...DEFAULT_CAPABILITY, supportsVision: true, intelligenceRank: 55, speedRank: 55 };
   }
 
-  // 4. Guess intelligence/speed from parameter count in the model name
-  const paramGuess = guessParamsFromName(lower);
-  if (paramGuess) {
-    const intel = clamp(Math.round(20 + paramGuess * 0.7), 20, 88);
-    const speed = clamp(Math.round(95 - paramGuess * 0.8), 10, 95);
-    return { ...DEFAULT_CAPABILITY, intelligenceRank: intel, speedRank: speed };
+  // 4. Infer model type
+  const type = inferModelType(modelId);
+
+  // 5. Guess intelligence/speed from parameter count in the model name
+  if (type === 'chat') {
+    const paramGuess = guessParamsFromName(lower);
+    if (paramGuess) {
+      const intel = clamp(Math.round(20 + paramGuess * 0.7), 20, 88);
+      const speed = clamp(Math.round(95 - paramGuess * 0.8), 10, 95);
+      return { ...DEFAULT_CAPABILITY, type, intelligenceRank: intel, speedRank: speed };
+    }
   }
 
-  return { ...DEFAULT_CAPABILITY };
+  return { ...DEFAULT_CAPABILITY, type };
 }
 
 /**

@@ -581,7 +581,8 @@ keysRouter.post('/custom', async (req: Request, res: Response) => {
 // intelligence rank, speed rank). No HTTP probe requests are sent — all
 // capability inference is local, making discovery fast and zero-cost.
 
-import { lookupModelCapability } from '../lib/model-capabilities.js';
+import { lookupModelCapability, inferModelType, stripVendorPrefix } from '../lib/model-capabilities.js';
+import type { ModelType } from '../lib/model-capabilities.js';
 
 const probeSchema = z.object({
   baseUrl: z.string().url('baseUrl must be a valid URL'),
@@ -590,6 +591,8 @@ const probeSchema = z.object({
 
 interface ProbedModel {
   id: string;
+  displayName: string;
+  type: ModelType;
   supportsTools: boolean;
   supportsVision: boolean;
   intelligenceRank: number;
@@ -599,6 +602,7 @@ interface ProbedModel {
 interface ProbeResult {
   models: ProbedModel[];
   toolsDetected: boolean;
+  typeSummary: { chat: number; embedding: number; image: number; audio: number };
 }
 
 function simpleFetch(url: string, options: { method?: string; headers?: Record<string, string>; body?: string; timeout?: number } = {}): Promise<{ status: number; body: string }> {
@@ -677,21 +681,35 @@ keysRouter.post('/custom/probe', async (req: Request, res: Response) => {
   }
 
   // 2. Match each model against the built-in capability knowledge base.
-  //    No HTTP probe — purely local model name → capability inference.
+  //    Strip vendor prefixes ("deepseek-ai/DeepSeek-V3" -> "DeepSeek-V3"),
+  //    deduplicate case-insensitively, and infer model type.
   let anyTools = false;
-  const models: ProbedModel[] = modelIds.map(id => {
+  const seen = new Map<string, ProbedModel>(); // lowercase id -> model
+  const typeCount = { chat: 0, embedding: 0, image: 0, audio: 0 };
+
+  for (const id of modelIds) {
+    const lower = id.toLowerCase();
+    // Skip exact case-insensitive duplicates
+    if (seen.has(lower)) continue;
+
     const cap = lookupModelCapability(id);
     if (cap.supportsTools) anyTools = true;
-    return {
-      id,
+
+    const model: ProbedModel = {
+      id,                          // keep original for API requests
+      displayName: stripVendorPrefix(id),
+      type: cap.type,
       supportsTools: cap.supportsTools,
       supportsVision: cap.supportsVision,
       intelligenceRank: cap.intelligenceRank,
       speedRank: cap.speedRank,
     };
-  });
+    seen.set(lower, model);
+    typeCount[cap.type]++;
+  }
 
-  const result: ProbeResult = { models, toolsDetected: anyTools };
+  const models = Array.from(seen.values());
+  const result: ProbeResult = { models, toolsDetected: anyTools, typeSummary: typeCount };
   res.json(result);
 });
 keysRouter.post('/import', (req: Request, res: Response, next: NextFunction) => {
