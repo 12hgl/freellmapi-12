@@ -2,6 +2,8 @@ import { Router } from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { z } from 'zod';
 import multer from 'multer';
+import https from 'node:https';
+import http from 'node:http';
 import path from 'path';
 import { getDb } from '../db/index.js';
 import { resolveProvider } from '../providers/index.js';
@@ -384,6 +386,8 @@ const modelEntrySchema = z.union([
     displayName: z.string().optional(),
     supportsTools: z.boolean().optional(),
     supportsVision: z.boolean().optional(),
+    intelligenceRank: z.number().int().min(0).max(100).optional(),
+    speedRank: z.number().int().min(0).max(100).optional(),
   }),
 ]);
 const customProviderSchema = z.object({
@@ -397,6 +401,8 @@ const customProviderSchema = z.object({
   // (object form) overrides them for that one model.
   supportsTools: z.boolean().optional(),
   supportsVision: z.boolean().optional(),
+  intelligenceRank: z.number().int().min(0).max(100).optional(),
+  speedRank: z.number().int().min(0).max(100).optional(),
 }).refine(
   d => (d.model && d.model.trim().length > 0) || (d.models && d.models.length > 0),
   { message: 'model or models is required' },
@@ -430,9 +436,11 @@ keysRouter.post('/custom', async (req: Request, res: Response) => {
   // then fall back to the submit-level defaults, then to undefined (DB default).
   const topTools = parsed.data.supportsTools;
   const topVision = parsed.data.supportsVision;
-  const entries: { modelId: string; displayName: string; supportsTools?: boolean; supportsVision?: boolean }[] = [];
+  const topIntel = parsed.data.intelligenceRank;
+  const topSpeed = parsed.data.speedRank;
+  const entries: { modelId: string; displayName: string; supportsTools?: boolean; supportsVision?: boolean; intelligenceRank?: number; speedRank?: number }[] = [];
   const seen = new Set<string>();
-  const addEntry = (rawId: string, rawDisplay?: string, tools?: boolean, vision?: boolean) => {
+  const addEntry = (rawId: string, rawDisplay?: string, tools?: boolean, vision?: boolean, intel?: number, speed?: number) => {
     const modelId = rawId.trim();
     if (!modelId || seen.has(modelId)) return;
     seen.add(modelId);
@@ -441,12 +449,14 @@ keysRouter.post('/custom', async (req: Request, res: Response) => {
       displayName: (rawDisplay?.trim() || modelId),
       supportsTools: tools ?? topTools,
       supportsVision: vision ?? topVision,
+      intelligenceRank: intel ?? topIntel,
+      speedRank: speed ?? topSpeed,
     });
   };
   if (parsed.data.model?.trim()) addEntry(parsed.data.model, parsed.data.displayName);
   for (const m of parsed.data.models ?? []) {
     if (typeof m === 'string') addEntry(m);
-    else addEntry(m.model, m.displayName, m.supportsTools, m.supportsVision);
+    else addEntry(m.model, m.displayName, m.supportsTools, m.supportsVision, m.intelligenceRank, m.speedRank);
   }
 
   if (entries.length === 0) {
@@ -491,10 +501,11 @@ keysRouter.post('/custom', async (req: Request, res: Response) => {
       storedKeyForMask = keyToStore;
     }
 
-    const registered: { modelDbId: number; model: string; displayName: string; supportsTools: boolean; supportsVision: boolean }[] = [];
-    for (const { modelId, displayName, supportsTools, supportsVision } of entries) {
+    const registered: { modelDbId: number; model: string; displayName: string; supportsTools: boolean; supportsVision: boolean; intelligenceRank: number; speedRank: number }[] = [];
+    for (const { modelId, displayName, supportsTools, supportsVision, intelligenceRank, speedRank } of entries) {
       // Register each model bound to THIS endpoint's key. Custom models carry no
-      // rate limits and sort last in the intelligence preset (size_label tier).
+      // rate limits. Intelligence and speed ranks default to 50; per-model values
+      // from probe discovery override them.
       // Re-registering an existing model id re-binds it (model ids are unique
       // per platform, so one id can't live on two endpoints at once).
       // Capability flags: an unset flag binds NULL so COALESCE picks the insert
@@ -502,12 +513,14 @@ keysRouter.post('/custom', async (req: Request, res: Response) => {
       // value on re-registration. (#470)
       const toolsParam = supportsTools === undefined ? null : (supportsTools ? 1 : 0);
       const visionParam = supportsVision === undefined ? null : (supportsVision ? 1 : 0);
+      const intelParam = intelligenceRank ?? null;
+      const speedParam = speedRank ?? null;
       db.prepare(`
         INSERT INTO models
           (platform, model_id, display_name, intelligence_rank, speed_rank, size_label,
            rpm_limit, rpd_limit, tpm_limit, tpd_limit, monthly_token_budget, context_window, enabled, key_id,
            supports_tools, supports_vision)
-        VALUES ('custom', @modelId, @displayName, 50, 50, 'Custom', NULL, NULL, NULL, NULL, '', NULL, 1, @keyId,
+        VALUES ('custom', @modelId, @displayName, COALESCE(@intel, 50), COALESCE(@speed, 50), 'Custom', NULL, NULL, NULL, NULL, '', NULL, 1, @keyId,
            COALESCE(@tools, 1), COALESCE(@vision, 0))
         ON CONFLICT(platform, model_id)
         DO UPDATE SET
@@ -515,10 +528,12 @@ keysRouter.post('/custom', async (req: Request, res: Response) => {
           key_id = excluded.key_id,
           enabled = 1,
           supports_tools = COALESCE(@tools, supports_tools),
-          supports_vision = COALESCE(@vision, supports_vision)
-      `).run({ modelId, displayName, keyId, tools: toolsParam, vision: visionParam });
+          supports_vision = COALESCE(@vision, supports_vision),
+          intelligence_rank = COALESCE(@intel, intelligence_rank),
+          speed_rank = COALESCE(@speed, speed_rank)
+      `).run({ modelId, displayName, keyId, tools: toolsParam, vision: visionParam, intel: intelParam, speed: speedParam });
 
-      const modelRow = db.prepare("SELECT id, supports_tools, supports_vision FROM models WHERE platform = 'custom' AND model_id = ?").get(modelId) as { id: number; supports_tools: number; supports_vision: number };
+      const modelRow = db.prepare("SELECT id, supports_tools, supports_vision, intelligence_rank, speed_rank FROM models WHERE platform = 'custom' AND model_id = ?").get(modelId) as { id: number; supports_tools: number; supports_vision: number; intelligence_rank: number; speed_rank: number };
 
       // Append to the fallback chain if not already present.
       const inChain = db.prepare('SELECT 1 FROM fallback_config WHERE model_db_id = ?').get(modelRow.id);
@@ -533,6 +548,8 @@ keysRouter.post('/custom', async (req: Request, res: Response) => {
         displayName,
         supportsTools: modelRow.supports_tools === 1,
         supportsVision: modelRow.supports_vision === 1,
+        intelligenceRank: modelRow.intelligence_rank,
+        speedRank: modelRow.speed_rank,
       });
     }
 
@@ -558,6 +575,125 @@ keysRouter.post('/custom', async (req: Request, res: Response) => {
   });
 });
 
+// ── Custom provider probe: auto-discover models & capabilities ─────
+// Fetches /v1/models from the endpoint, then matches each model ID against
+// a built-in knowledge base to determine capabilities (tools, vision,
+// intelligence rank, speed rank). No HTTP probe requests are sent — all
+// capability inference is local, making discovery fast and zero-cost.
+
+import { lookupModelCapability } from '../lib/model-capabilities.js';
+
+const probeSchema = z.object({
+  baseUrl: z.string().url('baseUrl must be a valid URL'),
+  apiKey: z.string().optional(),
+});
+
+interface ProbedModel {
+  id: string;
+  supportsTools: boolean;
+  supportsVision: boolean;
+  intelligenceRank: number;
+  speedRank: number;
+}
+
+interface ProbeResult {
+  models: ProbedModel[];
+  toolsDetected: boolean;
+}
+
+function simpleFetch(url: string, options: { method?: string; headers?: Record<string, string>; body?: string; timeout?: number } = {}): Promise<{ status: number; body: string }> {
+  const parsed = new URL(url);
+  const isTls = parsed.protocol === 'https:';
+  const transport = isTls ? https : http;
+  const port = parsed.port || (isTls ? 443 : 80);
+  const method = options.method ?? 'GET';
+  const timeout = options.timeout ?? 15_000;
+  const headers = options.headers ?? {};
+
+  return new Promise((resolve, reject) => {
+    const req = transport.request({
+      hostname: parsed.hostname,
+      port,
+      path: parsed.pathname + parsed.search,
+      method,
+      headers: { ...headers, host: parsed.hostname },
+      rejectUnauthorized: true,
+      timeout,
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: data }));
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+    if (options.body) req.write(options.body);
+    req.end();
+  });
+}
+
+keysRouter.post('/custom/probe', async (req: Request, res: Response) => {
+  const parsed = probeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: { message: parsed.error.errors.map(e => e.message).join(', ') } });
+    return;
+  }
+
+  const baseUrl = parsed.data.baseUrl.trim().replace(/\/+$/, '');
+  const apiKey = parsed.data.apiKey?.trim() || undefined;
+
+  const verdict = await assessProviderUrl(baseUrl);
+  if (!verdict.allowed) {
+    res.status(400).json({ error: { message: `baseUrl rejected: ${verdict.reason}` } });
+    return;
+  }
+
+  // 1. Fetch model list from the endpoint's /v1/models
+  const modelsHeaders: Record<string, string> = {};
+  if (apiKey) modelsHeaders['Authorization'] = `Bearer ${apiKey}`;
+
+  let modelIds: string[] = [];
+  try {
+    const modelsResp = await simpleFetch(`${baseUrl}/models`, {
+      headers: modelsHeaders,
+      timeout: 15_000,
+    });
+    if (modelsResp.status !== 200) {
+      res.status(502).json({ error: { message: `/v1/models returned HTTP ${modelsResp.status}: ${modelsResp.body.slice(0, 200)}` } });
+      return;
+    }
+    const json = JSON.parse(modelsResp.body);
+    const data = json?.data ?? [];
+    if (!Array.isArray(data) || data.length === 0) {
+      res.status(502).json({ error: { message: 'No models found in /v1/models response' } });
+      return;
+    }
+    modelIds = data
+      .map((m: any) => (m?.id ?? '').toString().trim())
+      .filter((id: string) => id.length > 0);
+  } catch (err: any) {
+    res.status(502).json({ error: { message: `Failed to fetch /v1/models: ${err.message}` } });
+    return;
+  }
+
+  // 2. Match each model against the built-in capability knowledge base.
+  //    No HTTP probe — purely local model name → capability inference.
+  let anyTools = false;
+  const models: ProbedModel[] = modelIds.map(id => {
+    const cap = lookupModelCapability(id);
+    if (cap.supportsTools) anyTools = true;
+    return {
+      id,
+      supportsTools: cap.supportsTools,
+      supportsVision: cap.supportsVision,
+      intelligenceRank: cap.intelligenceRank,
+      speedRank: cap.speedRank,
+    };
+  });
+
+  const result: ProbeResult = { models, toolsDetected: anyTools };
+  res.json(result);
+});
 keysRouter.post('/import', (req: Request, res: Response, next: NextFunction) => {
   upload.single('file')(req, res, (err: any) => {
     if (handleUploadError(err, res, next)) return;

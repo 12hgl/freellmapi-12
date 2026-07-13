@@ -22,6 +22,14 @@ function parseModelList(raw: string): string[] {
     .filter(s => s.length > 0 && !seen.has(s) && seen.add(s))
 }
 
+interface ProbedModel {
+  id: string
+  supportsTools: boolean
+  supportsVision: boolean
+  intelligenceRank: number
+  speedRank: number
+}
+
 // Always rendered inside the Add key dialog: no outer section chrome/heading.
 // `onAdded` lets that dialog close (and surface a toast) once a custom model is
 // saved.
@@ -34,10 +42,13 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
   const [displayName, setDisplayName] = useState('')
   const [family, setFamily] = useState('')
   const [apiKey, setApiKey] = useState('')
-  // Chat models default tools on (modern OpenAI-compatible servers all emit tool
-  // calls) and vision off; declare them here or flip them later per model. (#470)
+  // Capabilities are auto-detected via the probe endpoint; manually settable
+  // as fallback when discovery is skipped.
   const [supportsTools, setSupportsTools] = useState(true)
   const [supportsVision, setSupportsVision] = useState(false)
+  // Probe results: per-model capabilities from auto-discovery.
+  const [probedModels, setProbedModels] = useState<ProbedModel[] | null>(null)
+  const [toolsDetected, setToolsDetected] = useState(false)
 
   const models = customType === 'chat' ? parseModelList(model) : [model.trim()].filter(Boolean)
   const multiple = customType === 'chat' && models.length > 1
@@ -57,6 +68,30 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
     queryFn: () => apiFetch('/api/embeddings'),
   })
 
+  // Probe endpoint to discover models + capabilities from the custom endpoint.
+  const probe = useMutation({
+    meta: { silenceToast: true },
+    mutationFn: (body: { baseUrl: string; apiKey?: string }) =>
+      apiFetch<{ models: ProbedModel[]; toolsDetected: boolean }>('/api/keys/custom/probe', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (data) => {
+      const ids = data.models.map(m => m.id).join('\n')
+      setModel(ids)
+      setProbedModels(data.models)
+      setToolsDetected(data.toolsDetected)
+      setSupportsTools(data.toolsDetected)
+      // Set per-model vision: apply the first model's vision guess as default;
+      // individual model capabilities are carried in probedModels for submit.
+      setSupportsVision(data.models.some(m => m.supportsVision))
+      toast.success(t('keys.modelsDiscovered', { count: data.models.length }))
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || t('keys.discoverFailed'))
+    },
+  })
+
   const addCustom = useMutation({
     meta: { silenceToast: true },
     mutationFn: ({ path, body }: { path: string; body: Record<string, unknown> }) =>
@@ -71,6 +106,8 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
       setModel('')
       setDisplayName('')
       setFamily('')
+      setProbedModels(null)
+      setToolsDetected(false)
       setSupportsTools(true)
       setSupportsVision(false)
       if (onAdded) {
@@ -79,6 +116,38 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
       }
     },
   })
+
+  const handleDiscover = () => {
+    if (!baseUrl.trim() || !isHttpUrl(baseUrl)) {
+      setAttempted(true)
+      return
+    }
+    setAttempted(false)
+    probe.mutate({ baseUrl: baseUrl.trim(), apiKey: apiKey || undefined })
+  }
+
+  // Build model entries for submission. When probedModels is available,
+  // each model carries its own capability flags; otherwise fall back to
+  // the top-level toggles.
+  const buildModelEntries = (): (
+    | string
+    | { model: string; displayName?: string; supportsTools?: boolean; supportsVision?: boolean; intelligenceRank?: number; speedRank?: number }
+  )[] => {
+    if (!probedModels || models.length === 0) return models
+    const probedMap = new Map(probedModels.map(p => [p.id, p]))
+    return models.map(id => {
+      const p = probedMap.get(id)
+      return p
+        ? {
+            model: p.id,
+            supportsTools: p.supportsTools,
+            supportsVision: p.supportsVision,
+            intelligenceRank: p.intelligenceRank,
+            speedRank: p.speedRank,
+          }
+        : id
+    })
+  }
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -94,15 +163,17 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
       apiKey: apiKey || undefined,
     }
     if (customType === 'chat') {
+      // When probed, pass per-model capability entries.
+      const entries = buildModelEntries()
       addCustom.mutate({
         path: '/api/keys/custom',
         body: {
           baseUrl,
-          models,
+          models: entries,
           displayName: !multiple ? (displayName || undefined) : undefined,
           apiKey: apiKey || undefined,
-          supportsTools,
-          supportsVision,
+          // Top-level defaults apply only when probedModels is null.
+          ...(probedModels ? {} : { supportsTools, supportsVision }),
         },
       })
       return
@@ -166,7 +237,11 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
           <Label className="text-xs">{customType === 'chat' ? t('keys.customModels') : t('keys.customModel')}</Label>
           <Textarea
             value={model}
-            onChange={e => setModel(e.target.value)}
+            onChange={e => {
+              setModel(e.target.value)
+              // Clear probed results when user edits models manually.
+              if (probedModels) setProbedModels(null)
+            }}
             placeholder={modelPlaceholder}
             rows={customType === 'chat' ? 2 : 1}
             className="w-[200px] font-mono text-xs"
@@ -199,15 +274,36 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
           <div className="space-y-1.5">
             <Label className="text-xs">{t('keys.customCapabilities')}</Label>
             <div className="flex h-9 items-center gap-4">
-              <label className="flex items-center gap-1.5 text-xs">
-                <Switch size="sm" checked={supportsTools} onCheckedChange={setSupportsTools} />
-                <span>{t('models.tools')}</span>
-              </label>
-              <label className="flex items-center gap-1.5 text-xs">
-                <Switch size="sm" checked={supportsVision} onCheckedChange={setSupportsVision} />
-                <span>{t('models.vision')}</span>
-              </label>
+              {probedModels && models.length > 0 ? (
+                <span className="text-xs text-muted-foreground">
+                  {toolsDetected ? t('keys.toolsDetected') : t('keys.toolsNotDetected')}
+                </span>
+              ) : (
+                <>
+                  <label className="flex items-center gap-1.5 text-xs">
+                    <Switch size="sm" checked={supportsTools} onCheckedChange={setSupportsTools} />
+                    <span>{t('models.tools')}</span>
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs">
+                    <Switch size="sm" checked={supportsVision} onCheckedChange={setSupportsVision} />
+                    <span>{t('models.vision')}</span>
+                  </label>
+                </>
+              )}
             </div>
+          </div>
+        )}
+        {customType === 'chat' && (
+          <div className="space-y-1.5 self-end">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={probe.isPending || !baseUrl.trim()}
+              onClick={handleDiscover}
+            >
+              {probe.isPending ? t('keys.discovering') : t('keys.discoverModels')}
+            </Button>
           </div>
         )}
         <div className="space-y-1.5">
