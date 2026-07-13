@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -69,7 +69,6 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
   const [supportsVision, setSupportsVision] = useState(false)
 
   const [probedModels, setProbedModels] = useState<ProbedModel[] | null>(null)
-  const [toolsDetected, setToolsDetected] = useState(false)
   const [typeSummary, setTypeSummary] = useState<ProbeResult['typeSummary'] | null>(null)
 
   const models = customType === 'chat' ? parseModelList(model) : [model.trim()].filter(Boolean)
@@ -97,7 +96,6 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
       }),
     onSuccess: (data) => {
       setProbedModels(data.models)
-      setToolsDetected(data.toolsDetected)
       setTypeSummary(data.typeSummary)
       setSupportsTools(data.toolsDetected)
       setSupportsVision(data.models.some(m => m.supportsVision))
@@ -131,7 +129,6 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
       setDisplayName('')
       setFamily('')
       setProbedModels(null)
-      setToolsDetected(false)
       setTypeSummary(null)
       setSupportsTools(true)
       setSupportsVision(false)
