@@ -19,7 +19,7 @@ import { encrypt, decrypt } from '../lib/crypto.js';
 
 // ── SMTP config ──────────────────────────────────────────────────────────
 
-function getSmtpConfig() {
+export function getSmtpConfig() {
   const dbConfig = getSmtpConfigFromDb();
   const host = dbConfig.host || process.env.SMTP_HOST?.trim();
   if (!host) return null;
@@ -137,14 +137,14 @@ async function refreshMicrosoftToken(): Promise<string | null> {
   }
 
   try {
-    const res = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+    const res = await fetch('https://login.live.com/oauth20_token.srf', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         client_id: '3dfac626-81f7-463e-8c32-e03dc0e1af95',
         grant_type: 'refresh_token',
+        redirect_uri: 'https://login.live.com/oauth20_desktop.srf',
         refresh_token: refreshToken,
-        scope: 'https://outlook.office.com/SMTP.Send offline_access',
       }).toString(),
       signal: AbortSignal.timeout(15000),
     });
@@ -367,7 +367,7 @@ async function upgradeToTls(socket: SmtpSocket, host: string): Promise<SmtpSocke
   });
 }
 
-async function sendMailViaSmtp(
+export async function sendMailViaSmtp(
   cfg: { host: string; port: number; secure: boolean; user: string; pass: string; from: string; fromName: string; oauthToken?: string | null; oauthProvider?: string },
   to: string,
   subject: string,

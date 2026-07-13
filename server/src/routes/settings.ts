@@ -260,7 +260,7 @@ settingsRouter.put('/smtp-log', (req: Request, res: Response) => {
 // Fetches LATEST.json from GitHub repo, falls back to local copy.
 // Returns version + changelog + hasUpdate flag for the frontend.
 const GITHUB_LATEST_URL = 'https://raw.githubusercontent.com/12hgl/freellmapi-12/main/LATEST.json';
-const CURRENT_VERSION = '1.17';
+const CURRENT_VERSION = '1.19';
 
 settingsRouter.get('/latest-version', async (_req: Request, res: Response) => {
   const fallback = (version: string, changelog: string) => {
@@ -292,5 +292,44 @@ settingsRouter.get('/latest-version', async (_req: Request, res: Response) => {
     } catch {
       fallback(CURRENT_VERSION, '');
     }
+  }
+});
+
+// ─── Test Email ─────────────────────────────────────────────────────
+// Sends a test email through the configured SMTP server.
+settingsRouter.post('/test-email', async (_req: Request, res: Response) => {
+  try {
+    const {
+      getSmtpConfig,
+      sendMailViaSmtp,
+    } = await import('../services/smtp.js');
+
+    const cfg = getSmtpConfig();
+    if (!cfg || !cfg.host || !cfg.user) {
+      res.status(400).json({ error: 'SMTP 未配置，请先在邮件通知服务中完成 SMTP 设置' });
+      return;
+    }
+
+    // Use the SMTP user email as the recipient
+    const recipient = cfg.user;
+
+    const subject = 'FreeLLMAPI 测试邮件';
+    const htmlBody = `
+<div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 20px;">
+  <h2 style="color: #16a34a;">FreeLLMAPI 邮件通知服务</h2>
+  <p>这是 FreeLLMAPI 发送的测试邮件，邮件通知服务配置正常。</p>
+  <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
+  <p style="font-size: 12px; color: #9ca3af;">
+    SMTP 服务器：${cfg.host}:${cfg.port}<br/>
+    发件地址：${cfg.user}
+  </p>
+  <p style="font-size: 12px; color: #9ca3af;">此邮件由 FreeLLMAPI 系统自动发送，请勿回复。</p>
+</div>`;
+
+    await sendMailViaSmtp(cfg, recipient, subject, htmlBody);
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('[settings] test-email error:', err.message);
+    res.status(500).json({ error: `发送失败：${err.message}` });
   }
 });

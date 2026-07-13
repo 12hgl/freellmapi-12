@@ -1,9 +1,11 @@
 /**
- * Microsoft OAuth 2.0 route for Outlook email authorization.
+ * Microsoft OAuth 2.0 route for Outlook email authorization (consumer accounts).
+ *
+ * Uses login.live.com for Microsoft consumer accounts with desktop app redirect flow.
  *
  * Flow:
  *   GET  /api/oauth/microsoft/auth     → returns { url } for Microsoft login
- *   GET  /api/oauth/microsoft/callback → exchanges code for access_token
+ *   POST /api/oauth/microsoft/exchange → exchanges code for access_token
  *
  * The access_token is stored in settings (encrypted) and used by the SMTP
  * service for XOAUTH2 authentication with outlook.office365.com.
@@ -17,16 +19,13 @@ import { encrypt } from '../lib/crypto.js';
 export const oauthRouter = Router();
 
 const MS_CLIENT_ID = '3dfac626-81f7-463e-8c32-e03dc0e1af95';
-const MS_REDIRECT_URI = 'http://localhost:3001/api/oauth/microsoft/callback';
-const MS_AUTH_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize';
-const MS_TOKEN_URL = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
+const MS_REDIRECT_URI = 'https://login.live.com/oauth20_desktop.srf';
+const MS_AUTH_URL = 'https://login.live.com/oauth20_authorize.srf';
+const MS_TOKEN_URL = 'https://login.live.com/oauth20_token.srf';
 
-// Scopes needed for sending email via Microsoft Graph / SMTP AUTH
+// Scopes for Microsoft consumer accounts (Live SDK + SMTP Send)
 const MS_SCOPES = [
-  'openid',
-  'profile',
-  'email',
-  'offline_access',
+  'wl.offline_access',
   'https://outlook.office.com/SMTP.Send',
 ].join(' ');
 
@@ -37,35 +36,16 @@ oauthRouter.get('/microsoft/auth', (_req: Request, res: Response) => {
     response_type: 'code',
     redirect_uri: MS_REDIRECT_URI,
     scope: MS_SCOPES,
-    response_mode: 'query',
   });
   res.json({ url: `${MS_AUTH_URL}?${params.toString()}` });
 });
 
-// ─── GET /api/oauth/microsoft/callback ──────────────────────────────────
-oauthRouter.get('/microsoft/callback', async (req: Request, res: Response) => {
-  const { code, error, error_description } = req.query;
-
-  if (error) {
-    res.status(400).send(`
-      <html><body style="font-family:sans-serif;padding:40px;text-align:center">
-        <h2>授权失败</h2>
-        <p>${error_description || error}</p>
-        <p>请关闭此窗口并重试。</p>
-        <script>setTimeout(()=>window.close(),3000)</script>
-      </body></html>
-    `);
-    return;
-  }
+// ─── POST /api/oauth/microsoft/exchange ─────────────────────────────────
+oauthRouter.post('/microsoft/exchange', async (req: Request, res: Response) => {
+  const { code } = req.body;
 
   if (!code || typeof code !== 'string') {
-    res.status(400).send(`
-      <html><body style="font-family:sans-serif;padding:40px;text-align:center">
-        <h2>缺少授权码</h2>
-        <p>未收到 Microsoft 返回的授权码，请重试。</p>
-        <script>setTimeout(()=>window.close(),3000)</script>
-      </body></html>
-    `);
+    res.status(400).json({ error: '缺少授权码' });
     return;
   }
 
@@ -75,7 +55,6 @@ oauthRouter.get('/microsoft/callback', async (req: Request, res: Response) => {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         client_id: MS_CLIENT_ID,
-        scope: MS_SCOPES,
         code,
         redirect_uri: MS_REDIRECT_URI,
         grant_type: 'authorization_code',
@@ -109,23 +88,10 @@ oauthRouter.get('/microsoft/callback', async (req: Request, res: Response) => {
     setSetting('smtp_port', '587');
     setSetting('smtp_oauth_provider', 'microsoft');
 
-    res.send(`
-      <html><body style="font-family:sans-serif;padding:40px;text-align:center">
-        <h2 style="color:#16a34a">授权成功！</h2>
-        <p>Outlook 邮箱已成功授权，此窗口即将关闭。</p>
-        <script>setTimeout(()=>window.close(),2000)</script>
-      </body></html>
-    `);
+    res.json({ success: true });
   } catch (err: any) {
     console.error('[oauth] Microsoft token exchange error:', err.message);
-    res.status(500).send(`
-      <html><body style="font-family:sans-serif;padding:40px;text-align:center">
-        <h2>授权失败</h2>
-        <p>${err.message}</p>
-        <p>请关闭此窗口并重试。</p>
-        <script>setTimeout(()=>window.close(),3000)</script>
-      </body></html>
-    `);
+    res.status(500).json({ error: err.message });
   }
 });
 
