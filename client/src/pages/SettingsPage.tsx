@@ -38,6 +38,7 @@ interface AutoSyncStatus {
 interface LatestVersion {
   version: string
   changelog: string
+  hasUpdate: boolean
 }
 
 function fmtWhen(ms: number | null): string | null {
@@ -106,8 +107,27 @@ export default function SettingsPage() {
   const applyPreset = (preset: SmtpPreset) => {
     setSmtpHost(preset.host)
     setSmtpPort(String(preset.port))
+    setSelectedProvider(preset.label)
     if (!showSmtpForm) setShowSmtpForm(true)
   }
+
+  // ─── Sync Source ──────────────────────────────────────────────────
+  const [syncBaseUrl, setSyncBaseUrl] = useState('')
+  const [syncApiKey, setSyncApiKey] = useState('')
+
+  useEffect(() => {
+    if (syncData?.baseUrl) setSyncBaseUrl(syncData.baseUrl)
+  }, [syncData?.baseUrl])
+
+  const saveSyncSource = useMutation({
+    mutationFn: (body: { url: string; apiKey?: string }) =>
+      apiFetch('/api/premium/set-custom-url', { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['premium'] })
+      toast.success('同步源已更新')
+    },
+    onError: () => toast.error('保存失败'),
+  })
 
   // ─── Admin Port Separation ─────────────────────────────────────────
   const { data: adminPortData } = useQuery<{ enabled: boolean }>({
@@ -236,7 +256,60 @@ export default function SettingsPage() {
   })
 
   const currentVersion = '1.17'
-  const hasUpdate = latestVersion && latestVersion.version !== currentVersion
+  const hasUpdate = latestVersion?.hasUpdate ?? false
+
+  // ─── Outlook OAuth ────────────────────────────────────────────────
+  const [oauthOutlookAuthorized, setOauthOutlookAuthorized] = useState(false)
+  const [oauthChecking, setOauthChecking] = useState(false)
+
+  useEffect(() => {
+    // Check Outlook OAuth status on mount
+    apiFetch('/api/oauth/microsoft/status')
+      .then((d: any) => setOauthOutlookAuthorized(d?.authorized ?? false))
+      .catch(() => {})
+  }, [])
+
+  const startMicrosoftOAuth = () => {
+    apiFetch('/api/oauth/microsoft/auth')
+      .then((data: any) => {
+        if (data?.url) {
+          window.open(data.url, 'MicrosoftOAuth', 'width=600,height=700')
+        }
+      })
+      .catch(() => toast.error('无法启动 OAuth 授权'))
+  }
+
+  const revokeMicrosoftOAuth = () => {
+    apiFetch('/api/oauth/microsoft/revoke', { method: 'POST' })
+      .then(() => {
+        setOauthOutlookAuthorized(false)
+        toast.success('已撤销 Outlook OAuth 授权')
+      })
+      .catch(() => toast.error('撤销授权失败'))
+  }
+
+  // OAuth status polling after window opens
+  useEffect(() => {
+    if (!oauthOutlookAuthorized) {
+      const interval = setInterval(() => {
+        setOauthChecking(true)
+        apiFetch('/api/oauth/microsoft/status')
+          .then((d: any) => {
+            if (d?.authorized) {
+              setOauthOutlookAuthorized(true)
+              setOauthChecking(false)
+              toast.success('Outlook OAuth 授权成功')
+            }
+          })
+          .catch(() => setOauthChecking(false))
+      }, 3000)
+      return () => clearInterval(interval)
+    }
+  }, [oauthOutlookAuthorized])
+
+  // ─── SMTP Provider Selection ───────────────────────────────────────
+  const smtpProviders = ['Gmail', 'Outlook', 'QQ邮箱', '126邮箱', '163邮箱', 'Gmail (授权码)', '自定义']
+  const [selectedProvider, setSelectedProvider] = useState('')
 
   const syncCatalog = syncData?.catalog
   const hasSync = syncCatalog?.appliedVersion != null
@@ -349,66 +422,121 @@ export default function SettingsPage() {
               </Button>
             </div>
 
-            {/* 内置 SMTP 提供商快捷按钮 */}
-            <div className="flex flex-wrap gap-2 mb-3">
-              <span className="text-[11px] text-muted-foreground self-center mr-1">快速配置：</span>
-              {SMTP_PRESETS.map(preset => (
+            {/* 服务商选择 */}
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <span className="text-[11px] text-muted-foreground">服务商：</span>
+              {smtpProviders.map(prov => (
                 <Button
-                  key={preset.label}
-                  variant="outline"
+                  key={prov}
+                  variant={selectedProvider === prov ? 'default' : 'outline'}
                   size="xs"
                   className="h-7 text-[11px]"
-                  onClick={() => applyPreset(preset)}
+                  onClick={() => {
+                    setSelectedProvider(prov)
+                    if (!showSmtpForm) setShowSmtpForm(true)
+                    if (prov === 'Gmail') applyPreset(SMTP_PRESETS[0])
+                    else if (prov === 'Outlook') applyPreset(SMTP_PRESETS[3])
+                    else if (prov === 'QQ邮箱') applyPreset(SMTP_PRESETS[1])
+                    else if (prov === '163邮箱') applyPreset(SMTP_PRESETS[2])
+                    else if (prov === '126邮箱') { setSmtpHost('smtp.126.com'); setSmtpPort('994') }
+                    else if (prov === 'Gmail (授权码)') { setSmtpHost('smtp.gmail.com'); setSmtpPort('587') }
+                  }}
                 >
-                  {preset.label}
+                  {prov}
                 </Button>
               ))}
-              <span className="text-[10px] text-muted-foreground self-center ml-1">通过授权服务绑定</span>
             </div>
 
             {showSmtpForm && (
               <div className="space-y-3 border-t pt-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Outlook / Gmail OAuth 授权 */}
+                {selectedProvider === 'Outlook' && (
                   <div className="space-y-1.5">
-                    <Label className="text-xs">SMTP 服务器</Label>
-                    <Input value={smtpHost} onChange={e => setSmtpHost(e.target.value)} placeholder="smtp.gmail.com" className="h-9 text-sm" />
+                    <Label className="text-xs">Outlook OAuth 授权</Label>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm flex-1 px-3 py-1.5 bg-muted rounded-md border">
+                        {oauthOutlookAuthorized ? '已授权' : (oauthChecking ? '检测中…' : '未授权')}
+                      </span>
+                      {oauthOutlookAuthorized ? (
+                        <Button variant="outline" size="sm" className="h-9" onClick={revokeMicrosoftOAuth}>
+                          撤销授权
+                        </Button>
+                      ) : (
+                        <Button size="sm" className="h-9" onClick={startMicrosoftOAuth}>
+                          去授权
+                        </Button>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      Outlook 使用 Microsoft OAuth API 授权，无需输入密码。点击「去授权」后将弹出 Microsoft 登录窗口。
+                    </p>
                   </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">端口</Label>
-                    <Input value={smtpPort} onChange={e => setSmtpPort(e.target.value)} placeholder="587" className="h-9 text-sm" />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">邮箱账号</Label>
-                    <Input value={smtpUser} onChange={e => setSmtpUser(e.target.value)} placeholder="your@email.com" className="h-9 text-sm" />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">邮箱密码 / 授权码</Label>
-                    <div className="relative">
-                      <Input
-                        type={showPass ? 'text' : 'password'}
-                        value={smtpPass}
-                        onChange={e => setSmtpPass(e.target.value)}
-                        placeholder={smtp?.hasPass ? '•••••••• (留空不变)' : '输入邮箱授权码'}
-                        className="h-9 text-sm pr-9"
-                      />
-                      <button type="button" onClick={() => setShowPass(!showPass)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                        {showPass ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-                      </button>
+                )}
+
+                {/* SMTP 表单（非 Outlook 时显示） */}
+                {selectedProvider !== 'Outlook' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">SMTP 服务器</Label>
+                      <Input value={smtpHost} onChange={e => setSmtpHost(e.target.value)} placeholder="smtp.gmail.com" className="h-9 text-sm" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">端口</Label>
+                      <Input value={smtpPort} onChange={e => setSmtpPort(e.target.value)} placeholder="587" className="h-9 text-sm" />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">邮箱地址</Label>
+                      <div className="relative">
+                        <Input value={smtpUser} onChange={e => setSmtpUser(e.target.value)} placeholder="your@email.com" className="h-9 text-sm pr-12" />
+                        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">{smtpUser.length}/50</span>
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">邮箱密码 / 授权码</Label>
+                      <div className="relative">
+                        <Input
+                          type={showPass ? 'text' : 'password'}
+                          value={smtpPass}
+                          onChange={e => setSmtpPass(e.target.value)}
+                          placeholder={smtp?.hasPass ? '•••••••• (留空不变)' : '输入邮箱授权码'}
+                          className="h-9 text-sm pr-9"
+                        />
+                        <button type="button" onClick={() => setShowPass(!showPass)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                          {showPass ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">发件人显示名（可选）</Label>
+                      <Input value={smtpFrom} onChange={e => setSmtpFrom(e.target.value)} placeholder="FreeLLMAPI" className="h-9 text-sm" />
+                    </div>
+                    <div className="flex items-end">
+                      <Button size="sm" onClick={() => saveSmtp.mutate({ host: smtpHost.trim(), port: parseInt(smtpPort, 10) || 587, user: smtpUser.trim(), pass: smtpPass, from: smtpFrom.trim() })} disabled={saveSmtp.isPending} className="w-full h-9">
+                        {saveSmtp.isPending ? '保存中…' : '保存设置'}
+                      </Button>
                     </div>
                   </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">发件人显示名（可选）</Label>
-                    <Input value={smtpFrom} onChange={e => setSmtpFrom(e.target.value)} placeholder="FreeLLMAPI" className="h-9 text-sm" />
+                )}
+
+                {/* Outlook 额外说明 */}
+                {selectedProvider === 'Outlook' && (
+                  <div className="border-t pt-3 mt-3">
+                    <p className="text-[10px] text-muted-foreground">
+                      OAuth 授权后将自动配置 SMTP 服务器为 smtp-mail.outlook.com。保存设置后会覆盖云端配置。
+                    </p>
+                    <div className="flex gap-2 mt-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 text-xs"
+                        onClick={() => saveSmtp.mutate({ host: 'smtp-mail.outlook.com', port: 587, user: smtpUser.trim(), pass: smtpPass, from: smtpFrom.trim() })}
+                        disabled={saveSmtp.isPending}
+                      >
+                        {saveSmtp.isPending ? '保存中…' : '保存设置'}
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex items-end">
-                    <Button size="sm" onClick={() => saveSmtp.mutate({ host: smtpHost.trim(), port: parseInt(smtpPort, 10) || 587, user: smtpUser.trim(), pass: smtpPass, from: smtpFrom.trim() })} disabled={saveSmtp.isPending} className="w-full h-9">
-                      {saveSmtp.isPending ? '保存中…' : '保存设置'}
-                    </Button>
-                  </div>
-                </div>
-                <p className="text-[10px] text-muted-foreground">
-                  建议使用 SMTP 授权码而非邮箱密码。保存后将覆盖云端配置。
-                </p>
+                )}
               </div>
             )}
 
@@ -468,6 +596,18 @@ export default function SettingsPage() {
                 ) : (
                   <span className="text-xs text-emerald-600">已是最新版本</span>
                 )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => {
+                    queryClient.invalidateQueries({ queryKey: ['latest-version'] })
+                    toast.success('已检查更新')
+                  }}
+                >
+                  <RefreshCw className="size-3 mr-1" />
+                  检查更新
+                </Button>
               </div>
             </div>
             {latestVersion?.changelog && (
@@ -497,6 +637,37 @@ export default function SettingsPage() {
                 onCheckedChange={(v) => toggleSync.mutate(v)}
                 disabled={toggleSync.isPending}
               />
+            </div>
+
+            {/* 同步源 URL 配置 */}
+            <div className="border-t pt-4 space-y-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">同步源地址</Label>
+                <Input
+                  value={syncBaseUrl}
+                  onChange={e => setSyncBaseUrl(e.target.value)}
+                  placeholder="https://api.freellmapi.co"
+                  className="h-9 text-sm font-mono text-xs"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">API KEY（可选）</Label>
+                <Input
+                  value={syncApiKey}
+                  onChange={e => setSyncApiKey(e.target.value)}
+                  placeholder="用于认证同步源的 API 密钥"
+                  className="h-9 text-sm"
+                />
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs"
+                disabled={saveSyncSource.isPending}
+                onClick={() => saveSyncSource.mutate({ url: syncBaseUrl.trim(), apiKey: syncApiKey.trim() || undefined })}
+              >
+                {saveSyncSource.isPending ? '保存中…' : '保存同步源'}
+              </Button>
             </div>
 
             {/* 自动更新开关 */}

@@ -258,11 +258,11 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
     <form onSubmit={submit} className="flex flex-wrap items-start gap-3">
       {/* Provider Name (v1.16+): custom display name for the provider group */}
       <div className="space-y-1.5 min-w-[180px]">
-        <Label className="text-xs">{t('keys.providerName') || '提供商名称'}</Label>
+        <Label className="text-xs">{t('keys.providerName')}</Label>
         <Input
           value={providerName}
           onChange={e => setProviderName(e.target.value)}
-          placeholder={t('keys.providerNamePlaceholder') || '如：ModelScope魔搭社区'}
+          placeholder={t('keys.providerNamePlaceholder')}
           className="text-xs"
           spellCheck={false}
         />

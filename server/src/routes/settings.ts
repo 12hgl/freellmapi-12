@@ -257,23 +257,40 @@ settingsRouter.put('/smtp-log', (req: Request, res: Response) => {
 });
 
 // ─── Latest Version ──────────────────────────────────────────────────
-// Reads LATEST.json from the project root and returns the version + changelog.
-// The frontend polls this to compare against the running version and show
-// an update badge.
-settingsRouter.get('/latest-version', (_req: Request, res: Response) => {
-  try {
-    const latestPath = path.resolve(__dirname, '../../LATEST.json');
-    if (!fs.existsSync(latestPath)) {
-      res.json({ version: '1.17', changelog: '' });
-      return;
-    }
-    const raw = fs.readFileSync(latestPath, 'utf-8');
-    const data = JSON.parse(raw);
+// Fetches LATEST.json from GitHub repo, falls back to local copy.
+// Returns version + changelog + hasUpdate flag for the frontend.
+const GITHUB_LATEST_URL = 'https://raw.githubusercontent.com/12hgl/freellmapi-12/main/LATEST.json';
+const CURRENT_VERSION = '1.17';
+
+settingsRouter.get('/latest-version', async (_req: Request, res: Response) => {
+  const fallback = (version: string, changelog: string) => {
     res.json({
-      version: data.version || '1.17',
-      changelog: data.changelog || '',
+      version,
+      changelog,
+      hasUpdate: version !== CURRENT_VERSION,
     });
+  };
+
+  try {
+    const response = await fetch(GITHUB_LATEST_URL, {
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json() as { version?: string; changelog?: string };
+    fallback(data.version || CURRENT_VERSION, data.changelog || '');
   } catch {
-    res.json({ version: '1.17', changelog: '' });
+    // Network error: fall back to local LATEST.json
+    try {
+      const latestPath = path.resolve(__dirname, '../../LATEST.json');
+      if (fs.existsSync(latestPath)) {
+        const raw = fs.readFileSync(latestPath, 'utf-8');
+        const data = JSON.parse(raw);
+        fallback(data.version || CURRENT_VERSION, data.changelog || '');
+      } else {
+        fallback(CURRENT_VERSION, '');
+      }
+    } catch {
+      fallback(CURRENT_VERSION, '');
+    }
   }
 });

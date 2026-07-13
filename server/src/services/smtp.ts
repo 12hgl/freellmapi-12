@@ -14,7 +14,7 @@
 import crypto from 'crypto';
 import net from 'net';
 import tls from 'tls';
-import { getDb, getSetting } from '../db/index.js';
+import { getDb, getSetting, setSetting } from '../db/index.js';
 import { encrypt, decrypt } from '../lib/crypto.js';
 
 // ── SMTP config ──────────────────────────────────────────────────────────
@@ -23,6 +23,11 @@ function getSmtpConfig() {
   const dbConfig = getSmtpConfigFromDb();
   const host = dbConfig.host || process.env.SMTP_HOST?.trim();
   if (!host) return null;
+
+  // Check if Outlook OAuth is configured
+  const oauthProvider = getSetting('smtp_oauth_provider');
+  const oauthToken = oauthProvider === 'microsoft' ? getOAuthAccessToken() : null;
+
   return {
     host,
     port: dbConfig.port || Number(process.env.SMTP_PORT) || 587,
@@ -31,6 +36,8 @@ function getSmtpConfig() {
     pass: dbConfig.pass || process.env.SMTP_PASS?.trim() || '',
     from: process.env.TWO_FACTOR_VERIFY_SENDER?.trim() || dbConfig.from || process.env.SMTP_USER?.trim() || '',
     fromName: process.env.SMTP_FROM?.trim() || 'FreeLLMAPI',
+    oauthToken,
+    oauthProvider,
   };
 }
 
@@ -63,7 +70,112 @@ export function isSmtpConfigured(): boolean {
   return !!(cfg && cfg.host && cfg.user && cfg.pass);
 }
 
-// ── SMTP password encryption helpers ────────────────────────────────────
+// ── OAuth helpers ──────────────────────────────────────────────────────
+
+/**
+ * Retrieve a valid OAuth access token for the configured provider.
+ * Returns null if no OAuth token is configured or it has expired without a
+ * refresh token.
+ */
+function getOAuthAccessToken(): string | null {
+  const provider = getSetting('smtp_oauth_provider');
+  if (provider !== 'microsoft') return null;
+
+  const rawAccess = getSetting('oauth_outlook_access_token');
+  const expiryStr = getSetting('oauth_outlook_token_expiry');
+  if (!rawAccess) return null;
+
+  // Check if token is still valid (with 5-minute buffer)
+  if (expiryStr && Number(expiryStr) > Date.now() + 5 * 60 * 1000) {
+    try {
+      const parts = rawAccess.split(':');
+      if (parts.length >= 3) {
+        return decrypt(parts[0], parts[1], parts[2]);
+      }
+      return rawAccess;
+    } catch {
+      return rawAccess;
+    }
+  }
+
+  // Token expired — try refresh
+  const rawRefresh = getSetting('oauth_outlook_refresh_token');
+  if (!rawRefresh) {
+    // Mark as expired
+    return null;
+  }
+
+  // Synchronous refresh for SMTP — since sendMail is already async but
+  // we can't easily await here in a getter. Instead, sendMailViaSmtp will
+  // handle the fallback to null token case (which means OAuth won't be used
+  // and SMTP will try AUTH LOGIN instead).
+  //
+  // For the initial implementation, we return null to fall through to
+  // standard SMTP auth if the token is expired. A future enhancement can
+  // add an async refresh trigger.
+  return null;
+}
+
+/**
+ * Refresh the Microsoft OAuth access token using the stored refresh token.
+ * Returns the new access token, or null if refresh fails.
+ */
+async function refreshMicrosoftToken(): Promise<string | null> {
+  const rawRefresh = getSetting('oauth_outlook_refresh_token');
+  if (!rawRefresh) return null;
+
+  let refreshToken: string;
+  try {
+    const parts = rawRefresh.split(':');
+    if (parts.length >= 3) {
+      refreshToken = decrypt(parts[0], parts[1], parts[2]);
+    } else {
+      refreshToken = rawRefresh;
+    }
+  } catch {
+    return null;
+  }
+
+  try {
+    const res = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: '3dfac626-81f7-463e-8c32-e03dc0e1af95',
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        scope: 'https://outlook.office.com/SMTP.Send offline_access',
+      }).toString(),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!res.ok) {
+      console.warn(`[SMTP] OAuth refresh failed: HTTP ${res.status}`);
+      return null;
+    }
+
+    const data = await res.json() as {
+      access_token: string;
+      refresh_token?: string;
+      expires_in: number;
+    };
+
+    // Store new tokens
+    const { encrypted, iv, authTag } = encrypt(data.access_token);
+    setSetting('oauth_outlook_access_token', `${encrypted}:${iv}:${authTag}`);
+    setSetting('oauth_outlook_token_expiry', String(Date.now() + (data.expires_in || 3600) * 1000));
+
+    if (data.refresh_token) {
+      const { encrypted: encR, iv: ivR, authTag: tagR } = encrypt(data.refresh_token);
+      setSetting('oauth_outlook_refresh_token', `${encR}:${ivR}:${tagR}`);
+    }
+
+    return data.access_token;
+  } catch (err) {
+    console.warn(`[SMTP] OAuth refresh error: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
+}
 
 /**
  * Serialize encrypted SMTP password for storage in settings table.
@@ -256,12 +368,18 @@ async function upgradeToTls(socket: SmtpSocket, host: string): Promise<SmtpSocke
 }
 
 async function sendMailViaSmtp(
-  cfg: { host: string; port: number; secure: boolean; user: string; pass: string; from: string; fromName: string },
+  cfg: { host: string; port: number; secure: boolean; user: string; pass: string; from: string; fromName: string; oauthToken?: string | null; oauthProvider?: string },
   to: string,
   subject: string,
   html: string,
 ): Promise<void> {
   let socket: SmtpSocket;
+  let oauthToken = cfg.oauthToken ?? null;
+
+  // If OAuth token is expired, try async refresh before connecting
+  if (cfg.oauthProvider === 'microsoft' && !oauthToken) {
+    oauthToken = await refreshMicrosoftToken();
+  }
 
   // ── Connect ──────────────────────────────────────────────────────────
   if (cfg.secure) {
@@ -306,19 +424,32 @@ async function sendMailViaSmtp(
       if (ehlo2.code >= 400) throw new Error(`EHLO after TLS failed: ${ehlo2.text}`);
     }
 
-    // ── AUTH LOGIN ─────────────────────────────────────────────────────
-    sendCommand(socket, 'AUTH LOGIN');
-    const authResp = await readResponse(socket);
-    if (authResp.code !== 334) throw new Error(`AUTH LOGIN unexpected: ${authResp.text}`);
+    // ── AUTH ─────────────────────────────────────────────────────────────
+    if (oauthToken) {
+      // XOAUTH2 for Microsoft/Outlook
+      const xoauth2 = Buffer.from(`user=${cfg.user}\x01auth=Bearer ${oauthToken}\x01\x01`).toString('base64');
+      sendCommand(socket, 'AUTH XOAUTH2 ' + xoauth2);
+      const oauthResp = await readResponse(socket);
+      if (oauthResp.code >= 400) {
+        // XOAUTH2 may return a challenge on failure; consume it if present
+        throw new Error(`XOAUTH2 failed: ${oauthResp.text}`);
+      }
+      smtpLog('XOAUTH2 认证成功');
+    } else {
+      // Standard AUTH LOGIN
+      sendCommand(socket, 'AUTH LOGIN');
+      const authResp = await readResponse(socket);
+      if (authResp.code !== 334) throw new Error(`AUTH LOGIN unexpected: ${authResp.text}`);
 
-    sendCommand(socket, Buffer.from(cfg.user).toString('base64'));
-    const userResp = await readResponse(socket);
-    if (userResp.code !== 334) throw new Error(`AUTH user failed: ${userResp.text}`);
+      sendCommand(socket, Buffer.from(cfg.user).toString('base64'));
+      const userResp = await readResponse(socket);
+      if (userResp.code !== 334) throw new Error(`AUTH user failed: ${userResp.text}`);
 
-    sendCommand(socket, Buffer.from(cfg.pass).toString('base64'));
-    const passResp = await readResponse(socket);
-    if (passResp.code >= 400) throw new Error(`AUTH password failed: ${passResp.text}`);
-    smtpLog('SMTP 认证成功');
+      sendCommand(socket, Buffer.from(cfg.pass).toString('base64'));
+      const passResp = await readResponse(socket);
+      if (passResp.code >= 400) throw new Error(`AUTH password failed: ${passResp.text}`);
+      smtpLog('SMTP 认证成功');
+    }
 
     // ── MAIL FROM ──────────────────────────────────────────────────────
     const fromAddr = cfg.from || cfg.user;

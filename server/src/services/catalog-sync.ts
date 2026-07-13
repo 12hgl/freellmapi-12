@@ -350,11 +350,13 @@ export function applyCatalog(db: Db, catalog: Catalog): NonNullable<SyncResult['
 export async function syncCatalog(force = false): Promise<SyncResult> {
   const db = getDb();
   const key = getSetting(SETTING_LICENSE_KEY);
+  const apiKey = getSetting('catalog_api_key');
   const applied = getSetting(SETTING_APPLIED_VERSION);
 
   try {
     const headers: Record<string, string> = {};
     if (key) headers.Authorization = `Bearer ${key}`;
+    if (apiKey) headers['x-api-key'] = apiKey;
     const url = new URL(`${catalogBaseUrl()}/v1/latest`);
     if (applied && !force) url.searchParams.set('since', applied);
 

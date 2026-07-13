@@ -49,13 +49,16 @@ premiumRouter.post('/sync', async (_req: Request, res: Response) => {
   res.json({ ...statusPayload(), sync });
 });
 
-/** POST /api/premium/set-custom-url { url } */
+/** POST /api/premium/set-custom-url { url, apiKey } */
 premiumRouter.post('/set-custom-url', async (req: Request, res: Response) => {
-  const { url } = req.body ?? {};
+  const { url, apiKey } = req.body ?? {};
   if (url) {
     setSetting('catalog_custom_base_url', String(url).trim());
   } else {
     setSetting('catalog_custom_base_url', '');
+  }
+  if (apiKey !== undefined) {
+    setSetting('catalog_api_key', String(apiKey).trim());
   }
   res.json(statusPayload());
 });

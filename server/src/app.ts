@@ -18,6 +18,7 @@ import { settingsRouter } from './routes/settings.js';
 import { fusionRouter } from './routes/fusion.js';
 import { premiumRouter } from './routes/premium.js';
 import { smtpRouter } from './routes/smtp-settings.js';
+import { oauthRouter } from './routes/oauth.js';
 import { unifiedKeysRouter } from './routes/unified-keys.js';
 import { cacheRouter } from './routes/cache.js';
 import { authRouter } from './routes/auth.js';
@@ -87,6 +88,9 @@ export function createApp(config?: Config) {
   // session; everything else under /api/* requires a logged-in dashboard user.
   // The /v1 proxy keeps its own unified-API-key auth and is NOT gated here.
   app.use('/api/auth', authRouter);
+
+  // OAuth callbacks — must NOT require auth (redirect from providers)
+  app.use('/api/oauth', oauthRouter);
 
   // API routes — all admin endpoints sit behind requireAuth.
   app.use('/api/keys', requireAuth, keysRouter);

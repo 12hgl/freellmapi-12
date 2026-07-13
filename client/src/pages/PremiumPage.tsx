@@ -1,11 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState, useEffect } from 'react'
 import { RefreshCw, Database } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { PageHeader } from '@/components/page-header'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import { CardSkeleton } from '@/components/ui/skeleton'
+import { toast } from '@/lib/toast'
 import { useI18n } from '@/i18n'
 
 interface CatalogSyncState {
@@ -76,6 +80,24 @@ export default function PremiumPage() {
   const { enabled, autoUpdate, baseUrl, catalog } = data
   const hasSync = catalog.appliedVersion != null
 
+  // ─── Sync source editing ──────────────────────────────────────────
+  const [syncBaseUrl, setSyncBaseUrl] = useState(baseUrl)
+  const [syncApiKey, setSyncApiKey] = useState('')
+
+  useEffect(() => {
+    setSyncBaseUrl(baseUrl)
+  }, [baseUrl])
+
+  const saveSyncSource = useMutation({
+    mutationFn: (body: { url: string; apiKey?: string }) =>
+      apiFetch('/api/premium/set-custom-url', { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => {
+      invalidate()
+      toast.success('同步源已更新')
+    },
+    onError: () => toast.error('保存失败'),
+  })
+
   return (
     <div>
       <PageHeader
@@ -136,11 +158,37 @@ export default function PremiumPage() {
                 </div>
 
                 {/* 同步源 */}
-                <div>
+                <div className="space-y-3">
                   <h4 className="text-sm">{t('premium.sourceUrl')}</h4>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    <code className="font-mono bg-muted px-1 rounded text-[11px]">{baseUrl}</code>
-                  </p>
+                  <div className="space-y-2">
+                    <div className="space-y-1">
+                      <Label className="text-xs">同步源地址</Label>
+                      <Input
+                        value={syncBaseUrl}
+                        onChange={e => setSyncBaseUrl(e.target.value)}
+                        placeholder="https://api.freellmapi.co"
+                        className="h-9 text-sm font-mono text-xs"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">API KEY（可选）</Label>
+                      <Input
+                        value={syncApiKey}
+                        onChange={e => setSyncApiKey(e.target.value)}
+                        placeholder="用于认证同步源的 API 密钥"
+                        className="h-9 text-sm"
+                      />
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 text-xs"
+                      disabled={saveSyncSource.isPending}
+                      onClick={() => saveSyncSource.mutate({ url: syncBaseUrl.trim(), apiKey: syncApiKey.trim() || undefined })}
+                    >
+                      {saveSyncSource.isPending ? '保存中…' : '保存同步源'}
+                    </Button>
+                  </div>
                 </div>
               </div>
             )}
