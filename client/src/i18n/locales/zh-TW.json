@@ -284,6 +284,15 @@
     "customModel": "模型",
     "customFamily": "系列",
     "customFamilyPlaceholder": "默认为模型 ID",
+    "customProviderName": "提供商名称",
+    "customProviderNamePlaceholder": "例如：我的Ollama",
+    "typeDetected": "已自动识别为 {type} 类型",
+    "discoverModels": "发现模型",
+    "discovering": "发现中…",
+    "discoverFailed": "发现失败",
+    "modelsDiscovered": "发现 {count} 个模型",
+    "toolsDetected": "已检测到 Tool 支持",
+    "toolsNotDetected": "未检测到 Tool 支持",
     "addEmbeddingModel": "添加嵌入模型",
     "addImageModel": "添加图像模型",
     "addAudioModel": "添加音频模型",
@@ -310,32 +319,20 @@
     "export": {
       "json": "JSON",
       "env": ".env",
-      "csv": "CSV",
-      "title": "导出密钥",
-      "allKeys": "全部密钥",
-      "healthyOnly": "仅健康密钥",
-      "exportApiKeys": "导出API密钥",
-      "format": "格式",
-      "healthyOnlyDesc": "排除当前健康检查失败的密钥",
-      "willExport": "将导出",
-      "key": "个密钥",
-      "keys_plural": "个密钥",
-      "exporting": "导出中…",
-      "download": "下载",
-      "success": "已导出 {count} 个密钥"
+      "csv": "CSV"
     },
-    "exportAll": "全部密钥",
-    "exportHealthy": "仅健康密钥",
-    "exportKeys": "导出API密钥",
-    "exportFormat": "格式",
-    "exportHealthyOnly": "仅健康密钥",
-    "exportHealthyOnlyDesc": "排除当前健康检查失败的密钥",
-    "exportWillExport": "将导出",
-    "exportKey": "个密钥",
-    "exportKeys plural": "个密钥",
-    "exporting": "导出中…",
-    "exportDownload": "下载",
-    "exportSuccess": "已导出 {count} 个密钥"
+    "exportAll": "All keys",
+    "exportHealthy": "Healthy only",
+    "exportKeys": "Export API keys",
+    "exportFormat": "Format",
+    "exportHealthyOnly": "Healthy keys only",
+    "exportHealthyOnlyDesc": "Exclude keys that are currently failing health checks",
+    "exportWillExport": "Will export",
+    "exportKey": "key",
+    "exportKeys plural": "keys",
+    "exporting": "Exporting…",
+    "exportDownload": "Download",
+    "exportSuccess": "Exported {count} keys"
   },
   "status": {
     "healthy": "健康",
@@ -517,7 +514,11 @@
     "fr": "Français",
     "es": "Español",
     "pt-BR": "Português (Brasil)",
-    "it": "Italiano"
+    "it": "Italiano",
+    "zh-TW": "中文 (繁體)",
+    "ja": "日本語",
+    "ko": "한국어",
+    "ru": "Русский"
   },
   "errors": {
     "boundaryTitle": "出错了",
@@ -578,5 +579,76 @@
     "url": "请输入以 http:// 或 https:// 开头的有效 URL",
     "email": "请输入有效的邮箱地址",
     "passwordMin": "至少 {min} 个字符"
+  },
+  "settings": {
+    "title": "系统设置",
+    "description": "SMTP 邮箱验证、同步源与自动检查配置",
+    "success": "操作成功！",
+    "smtp": {
+      "title": "SMTP",
+      "configTitle": "SMTP 配置",
+      "configured": "已配置 → {host}",
+      "notConfigured": "未配置，登录时将跳过邮箱验证",
+      "collapse": "收起",
+      "setup": "设置",
+      "loginVerify": "登录时启用邮箱验证",
+      "loginVerifyDesc": "关闭后即使 SMTP 已配置也不会在登录时发送验证码",
+      "host": "SMTP 服务器",
+      "port": "端口",
+      "user": "邮箱账号",
+      "password": "邮箱密码 / 授权码",
+      "passwordKeep": "•••••••• (留空不变)",
+      "passwordPlaceholder": "输入邮箱授权码",
+      "from": "发件人显示名（可选）",
+      "save": "保存设置",
+      "hint": "建议使用 SMTP 授权码而非邮箱密码。保存后将覆盖云端配置。",
+      "logEnable": "启用 SMTP 发送日志",
+      "logEnableDesc": "在服务端控制台输出邮件发送过程日志",
+      "logShowCode": "在日志中显示验证码",
+      "logShowCodeDesc": "开启后验证码将明文出现在日志中（调试用）"
+    },
+    "sync": {
+      "title": "自动同步",
+      "enable": "启用自动同步",
+      "enableDesc": "定时从同步源拉取最新数据更新",
+      "autoUpdate": "自动应用更新",
+      "autoUpdateDesc": "同步后自动应用最新数据，否则仅提醒",
+      "customUrl": "自定义同步源 URL",
+      "liveSource": "实时源",
+      "monthlySnapshot": "月度快照",
+      "builtin": "内置",
+      "lastChecked": "上次检查：",
+      "syncNow": "立即同步",
+      "syncing": "同步中…",
+      "syncSuccess": "同步完成！",
+      "syncFailed": "同步失败"
+    },
+    "keyCheck": {
+      "title": "密钥检查",
+      "subtitle": "自动检查来源方 API 密钥",
+      "desc": "每天自动检查已配置的提供商 API 密钥是否仍然有效"
+    },
+    "portSeparation": {
+      "title": "端口分离",
+      "subtitle": "分离管理面板端口",
+      "desc": "将管理面板前端独立到容器 3002 端口，API 保持在 3001",
+      "savedHint": "更改已保存，重启容器后生效"
+    },
+    "about": {
+      "title": "关于",
+      "currentVersion": "当前版本",
+      "checkUpdate": "检查更新",
+      "upToDate": "已是最新",
+      "newVersion": "发现新版本 v{version}",
+      "footer": "基于 freellmapi 二次开发，仓库地址"
+    },
+    "loginSecurity": {
+      "title": "登录安全",
+      "ipLimit": "IP 登录限流",
+      "ipLimitDesc": "同一 IP 连续登录失败达到阈值后临时封禁",
+      "threshold": "失败次数阈值",
+      "thresholdDesc": "连续失败超过此次数后封禁 IP",
+      "duration": "封禁时长（秒）"
+    }
   }
 }

@@ -8,7 +8,12 @@ import { isUnifyEnabled, setUnifyEnabled, getUnifyOverrides, setUnifyOverrides, 
 import { getClaudeModelMap, setClaudeModelMap } from '../services/anthropic-map.js';
 import { z } from 'zod';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { getIpLimitConfig, setIpLimitConfig } from '../services/ip-rate-limiter.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const settingsRouter = Router();
 
@@ -249,4 +254,26 @@ settingsRouter.put('/smtp-log', (req: Request, res: Response) => {
     enabled: getSetting('smtp_log_enabled') !== '0',
     showCode: getSetting('smtp_log_show_code') === '1',
   });
+});
+
+// ─── Latest Version ──────────────────────────────────────────────────
+// Reads LATEST.json from the project root and returns the version + changelog.
+// The frontend polls this to compare against the running version and show
+// an update badge.
+settingsRouter.get('/latest-version', (_req: Request, res: Response) => {
+  try {
+    const latestPath = path.resolve(__dirname, '../../LATEST.json');
+    if (!fs.existsSync(latestPath)) {
+      res.json({ version: '1.17', changelog: '' });
+      return;
+    }
+    const raw = fs.readFileSync(latestPath, 'utf-8');
+    const data = JSON.parse(raw);
+    res.json({
+      version: data.version || '1.17',
+      changelog: data.changelog || '',
+    });
+  } catch {
+    res.json({ version: '1.17', changelog: '' });
+  }
 });

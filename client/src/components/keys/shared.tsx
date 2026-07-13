@@ -78,6 +78,52 @@ export function customModelDeletePath(model: ApiKeyModel): string {
   return `/api/media/custom/${model.id}`
 }
 
+// --------------- Platform display names (Chinese) ---------------
+// Maps vendor prefixes commonly seen in model IDs to their Chinese
+// display names for the provider list and custom endpoint UI.
+export const PLATFORM_DISPLAY_NAMES: Record<string, string> = {
+  'OpenAI': 'OpenAI',
+  'Anthropic': 'Anthropic',
+  'Google': 'Google',
+  'Meta': 'Meta',
+  'DeepSeek': 'DeepSeek',
+  'Mistral': 'Mistral',
+  'Cohere': 'Cohere',
+  'Qwen': '通义千问',
+  'Baidu': '百度',
+  'Alibaba': '阿里巴巴',
+  'Tencent': '腾讯',
+  'ByteDance': '字节跳动',
+  'ZhipuAI': '智谱AI',
+  'Minimax': 'MiniMax',
+  'Moonshot': '月之暗面',
+  '01.AI': '零一万物',
+  'StepFun': '阶跃星辰',
+  'Inception': 'Inception',
+  'NVIDIA': 'NVIDIA',
+  'NousResearch': 'NousResearch',
+  'Yi': '零一万物',
+  'OpenChat': 'OpenChat',
+  'Microsoft': '微软',
+  'Amazon': '亚马逊',
+  'AI21': 'AI21',
+  'Stability': 'Stability AI',
+  'Midjourney': 'Midjourney',
+  'Replicate': 'Replicate',
+}
+
+/** Strip vendor prefixes like "openai/" or "google/" from model IDs for display. */
+export function stripVendorPrefix(modelId: string): string {
+  const idx = modelId.indexOf('/')
+  if (idx <= 0) return modelId
+  const prefix = modelId.slice(0, idx)
+  // Only strip if the prefix looks like a known vendor (alpha + optional dots/digits)
+  if (/^[a-zA-Z][a-zA-Z0-9.]*$/.test(prefix)) {
+    return modelId.slice(idx + 1)
+  }
+  return modelId
+}
+
 export const statusDot: Record<string, string> = {
   healthy: 'bg-emerald-500',
   rate_limited: 'bg-amber-500',

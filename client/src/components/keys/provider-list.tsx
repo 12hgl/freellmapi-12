@@ -29,6 +29,7 @@ import {
   customModelDeletePath,
   statusDot,
   statusLabelKey,
+  stripVendorPrefix,
 } from './shared'
 import type { HealthData } from './shared'
 
@@ -167,10 +168,16 @@ export function ProviderList({ onAddKey }: { onAddKey: () => void }) {
   for (const k of healthData?.keys ?? []) healthKeyMap.set(k.id, k)
   const statusOf = (k: ApiKey) => healthKeyMap.get(k.id)?.status ?? k.status
 
-  const grouped = [...PLATFORMS, CUSTOM_GROUP].map(p => ({
-    ...p,
-    keys: keys.filter(k => k.platform === p.value),
-  })).filter(p => p.keys.length > 0)
+  const grouped = [...PLATFORMS, CUSTOM_GROUP].map(p => {
+    const groupKeys = keys.filter(k => k.platform === p.value)
+    // For custom group, derive display label from providerName (v1.17)
+    let label = p.label
+    if (p.value === 'custom' && groupKeys.length > 0) {
+      const pn = groupKeys.find(k => k.providerName)?.providerName
+      label = pn ? `${pn}（自定义提供方）` : p.label
+    }
+    return { ...p, keys: groupKeys, label }
+  }).filter(p => p.keys.length > 0)
 
   const totalProviders = grouped.length
   const totalKeys = grouped.reduce((n, g) => n + g.keys.length, 0)
@@ -447,7 +454,7 @@ export function ProviderList({ onAddKey }: { onAddKey: () => void }) {
                                       {t(CUSTOM_MODEL_KIND_LABEL[model.kind])}
                                     </span>
                                     <span className="max-w-[180px] truncate font-medium" title={model.modelId}>
-                                      {model.displayName}
+                                      {stripVendorPrefix(model.displayName) || stripVendorPrefix(model.modelId)}
                                     </span>
                                     {model.family && (
                                       <code className="max-w-[160px] truncate text-muted-foreground" title={model.family}>

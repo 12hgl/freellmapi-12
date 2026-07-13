@@ -5,8 +5,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { FieldError } from '@/components/ui/field-error'
 import { isHttpUrl } from '@/lib/validate'
 import { useI18n } from '@/i18n'
@@ -60,16 +58,19 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
   const queryClient = useQueryClient()
 
   const [customType, setCustomType] = useState<ModelType>('chat')
+  const [providerName, setProviderName] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
   const [model, setModel] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [family, setFamily] = useState('')
   const [apiKey, setApiKey] = useState('')
-  const [supportsTools, setSupportsTools] = useState(true)
-  const [supportsVision, setSupportsVision] = useState(false)
 
   const [probedModels, setProbedModels] = useState<ProbedModel[] | null>(null)
   const [typeSummary, setTypeSummary] = useState<ProbeResult['typeSummary'] | null>(null)
+
+  // Auto-detect: supportsTools and supportsVision from probe, defaults when no probe
+  const supportsTools = probedModels ? probedModels.some(m => m.supportsTools) : true
+  const supportsVision = probedModels ? probedModels.some(m => m.supportsVision) : false
 
   const models = customType === 'chat' ? parseModelList(model) : [model.trim()].filter(Boolean)
   const multiple = customType === 'chat' && models.length > 1
@@ -97,8 +98,6 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
     onSuccess: (data) => {
       setProbedModels(data.models)
       setTypeSummary(data.typeSummary)
-      setSupportsTools(data.toolsDetected)
-      setSupportsVision(data.models.some(m => m.supportsVision))
 
       const { chat, embedding, image, audio } = data.typeSummary
       if (embedding > chat && embedding > image && embedding > audio) setCustomType('embedding')
@@ -130,8 +129,7 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
       setFamily('')
       setProbedModels(null)
       setTypeSummary(null)
-      setSupportsTools(true)
-      setSupportsVision(false)
+      setProviderName('')
       if (onAdded) toast.success(t('keys.modelAdded')) && onAdded()
     },
   })
@@ -174,6 +172,8 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
     }
     setAttempted(false)
 
+    const pn = providerName.trim() || undefined
+
     if (customType === 'chat') {
       const entries = buildModelEntries()
       addCustom.mutate({
@@ -183,7 +183,9 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
           models: entries,
           displayName: !multiple ? (displayName || undefined) : undefined,
           apiKey: apiKey || undefined,
-          ...(probedModels ? {} : { supportsTools, supportsVision }),
+          providerName: pn,
+          supportsTools,
+          supportsVision,
         },
       })
       return
@@ -193,6 +195,7 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
       model: models[0],
       displayName: displayName || undefined,
       apiKey: apiKey || undefined,
+      providerName: pn,
     }
     if (customType === 'embedding') {
       addCustom.mutate({
@@ -230,6 +233,12 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
     audio: t('keys.customTypeAudio'),
   }
 
+  const probedTypeBadge = probedModels && typeSummary ? (
+    <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 font-medium">
+      {typeLabels[customType]}
+    </span>
+  ) : null
+
   const probedSummary = probedModels && typeSummary ? (
     <div className="w-full space-y-1.5 mt-1">
       <div className="flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
@@ -247,20 +256,16 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
 
   const form = (
     <form onSubmit={submit} className="flex flex-wrap items-start gap-3">
-      {/* Type */}
-      <div className="space-y-1.5">
-        <Label className="text-xs">{t('keys.customType')}</Label>
-        <Select value={customType} onValueChange={(v) => setCustomType(v as ModelType)}>
-          <SelectTrigger className="w-[120px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="chat">{typeLabels.chat}</SelectItem>
-            <SelectItem value="embedding">{typeLabels.embedding}</SelectItem>
-            <SelectItem value="image">{typeLabels.image}</SelectItem>
-            <SelectItem value="audio">{typeLabels.audio}</SelectItem>
-          </SelectContent>
-        </Select>
+      {/* Provider Name (v1.16+): custom display name for the provider group */}
+      <div className="space-y-1.5 min-w-[180px]">
+        <Label className="text-xs">{t('keys.providerName') || '提供商名称'}</Label>
+        <Input
+          value={providerName}
+          onChange={e => setProviderName(e.target.value)}
+          placeholder={t('keys.providerNamePlaceholder') || '如：ModelScope魔搭社区'}
+          className="text-xs"
+          spellCheck={false}
+        />
       </div>
 
       {/* Base URL */}
@@ -280,19 +285,20 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
       {/* Models */}
       <div className="space-y-1.5 min-w-[240px] flex-[2]">
         <div className="flex items-center justify-between">
-          <Label className="text-xs">{customType === 'chat' ? t('keys.customModels') : t('keys.customModel')}</Label>
-          {customType === 'chat' && (
-            <Button
-              type="button"
-              size="xs"
-              variant="ghost"
-              className="h-5 px-1.5 text-[10px]"
-              disabled={probe.isPending || !baseUrl.trim()}
-              onClick={handleDiscover}
-            >
-              {probe.isPending ? t('keys.discovering') : t('keys.discoverModels')}
-            </Button>
-          )}
+          <div className="flex items-center gap-2">
+            <Label className="text-xs">{customType === 'chat' ? t('keys.customModels') : t('keys.customModel')}</Label>
+            {probedTypeBadge}
+          </div>
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            className="h-5 px-1.5 text-[10px]"
+            disabled={probe.isPending || !baseUrl.trim()}
+            onClick={handleDiscover}
+          >
+            {probe.isPending ? t('keys.discovering') : t('keys.discoverModels')}
+          </Button>
         </div>
         <Textarea
           value={model}
@@ -333,23 +339,6 @@ export function CustomProviderSection({ onAdded }: { onAdded?: () => void } = {}
             className="w-[160px] font-mono text-xs"
             spellCheck={false}
           />
-        </div>
-      )}
-
-      {/* Capabilities (chat only, manual mode) */}
-      {customType === 'chat' && !probedModels && (
-        <div className="space-y-1.5">
-          <Label className="text-xs">{t('keys.customCapabilities')}</Label>
-          <div className="flex h-9 items-center gap-4">
-            <label className="flex items-center gap-1.5 text-xs">
-              <Switch size="sm" checked={supportsTools} onCheckedChange={setSupportsTools} />
-              <span>{t('models.tools')}</span>
-            </label>
-            <label className="flex items-center gap-1.5 text-xs">
-              <Switch size="sm" checked={supportsVision} onCheckedChange={setSupportsVision} />
-              <span>{t('models.vision')}</span>
-            </label>
-          </div>
         </div>
       )}
 

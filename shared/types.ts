@@ -166,6 +166,7 @@ export interface ApiKey {
   label: string;
   maskedKey: string;
   baseUrl: string | null;
+  providerName?: string | null;
   status: KeyStatus;
   enabled: boolean;
   keyless: boolean;

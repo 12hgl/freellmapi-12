@@ -1,6 +1,6 @@
 {
   "name": "@freellmapi/server",
-  "version": "0.2.1",
+  "version": "1.17",
   "private": true,
   "type": "module",
   "scripts": {
