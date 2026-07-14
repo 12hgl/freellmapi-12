@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from '@/lib/api'
 import { toast } from '@/lib/toast'
@@ -273,8 +273,13 @@ export default function SettingsPage() {
   const [oauthOutlookAuthorized, setOauthOutlookAuthorized] = useState(false)
   const [oauthGmailAuthorized, setOauthGmailAuthorized] = useState(false)
   const [oauthChecking, setOauthChecking] = useState(false)
-  const [oauthAwaitingCode, setOauthAwaitingCode] = useState(false)
-  const [oauthAuthCode, setOauthAuthCode] = useState('')
+
+  // Device Code Flow state
+  const [oauthUserCode, setOauthUserCode] = useState('')
+  const [oauthVerificationUri, setOauthVerificationUri] = useState('')
+  const [oauthPolling, setOauthPolling] = useState(false)
+  const [oauthPollCount, setOauthPollCount] = useState(0)
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
     apiFetch('/api/oauth/microsoft/status')
@@ -282,28 +287,65 @@ export default function SettingsPage() {
       .catch(() => {})
   }, [])
 
-  const exchangeOAuthCode = useMutation({
-    mutationFn: (code: string) =>
-      apiFetch('/api/oauth/microsoft/exchange', { method: 'POST', body: JSON.stringify({ code }) }),
-    onSuccess: () => {
-      setOauthOutlookAuthorized(true)
-      setOauthAwaitingCode(false)
-      setOauthAuthCode('')
-      queryClient.invalidateQueries({ queryKey: ['smtp-config'] })
-      toast.success('Outlook OAuth 授权成功')
-    },
-    onError: () => {
-      toast.error('授权码无效或已过期，请重试')
-      setOauthAuthCode('')
-    },
-  })
+  // Clean up poll timer on unmount
+  useEffect(() => {
+    return () => { if (pollTimerRef.current) clearInterval(pollTimerRef.current) }
+  }, [])
+
+  const cancelOAuth = () => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current)
+      pollTimerRef.current = null
+    }
+    setOauthPolling(false)
+    setOauthUserCode('')
+    setOauthVerificationUri('')
+    setOauthPollCount(0)
+  }
 
   const startMicrosoftOAuth = () => {
     apiFetch('/api/oauth/microsoft/auth')
       .then((data: any) => {
-        if (data?.url) {
-          setOauthAwaitingCode(true)
-          window.open(data.url, 'MicrosoftOAuth', 'width=600,height=700')
+        if (data?.user_code) {
+          setOauthUserCode(data.user_code)
+          setOauthVerificationUri(data.verification_uri)
+          setOauthPolling(true)
+          setOauthPollCount(0)
+          window.open(data.verification_uri, 'MicrosoftOAuth', 'width=600,height=700')
+
+          const deviceCode = data.device_code
+          pollTimerRef.current = setInterval(() => {
+            setOauthPollCount(c => {
+              const next = c + 1
+              if (next > 24) {
+                cancelOAuth()
+                toast.error('授权超时（120秒），请重试')
+                return c
+              }
+              return next
+            })
+
+            apiFetch('/api/oauth/microsoft/poll', {
+              method: 'POST',
+              body: JSON.stringify({ device_code: deviceCode }),
+            })
+              .then((d: any) => {
+                if (d?.status === 'completed') {
+                  if (pollTimerRef.current) clearInterval(pollTimerRef.current)
+                  setOauthOutlookAuthorized(true)
+                  setOauthPolling(false)
+                  setOauthUserCode('')
+                  setOauthVerificationUri('')
+                  setOauthPollCount(0)
+                  queryClient.invalidateQueries({ queryKey: ['smtp-config'] })
+                  toast.success('Outlook OAuth 授权成功')
+                } else if (d?.status === 'expired') {
+                  cancelOAuth()
+                  toast.error('设备码已过期，请重新授权')
+                }
+              })
+              .catch(() => {})
+          }, 5000)
         }
       })
       .catch(() => toast.error('无法启动 OAuth 授权'))
@@ -522,8 +564,8 @@ export default function SettingsPage() {
                           <Button variant="outline" size="sm" className="h-9" onClick={revokeMicrosoftOAuth}>
                             撤销授权
                           </Button>
-                        ) : oauthAwaitingCode ? (
-                          <Button variant="outline" size="sm" className="h-9" onClick={() => { setOauthAwaitingCode(false); setOauthAuthCode('') }}>
+                        ) : oauthPolling ? (
+                          <Button variant="outline" size="sm" className="h-9" onClick={cancelOAuth}>
                             取消
                           </Button>
                         ) : (
@@ -532,32 +574,34 @@ export default function SettingsPage() {
                           </Button>
                         )}
                       </div>
-                      {oauthAwaitingCode && !oauthOutlookAuthorized && (
+                      {oauthPolling && !oauthOutlookAuthorized && (
                         <div className="mt-2 space-y-2">
                           <p className="text-[10px] text-muted-foreground">
-                            请在弹出的 Microsoft 登录页面完成授权后，将页面中显示的授权码粘贴到下方输入框。
+                            请在弹出的页面中输入以下代码完成授权：
                           </p>
-                          <div className="flex gap-2">
-                            <Input
-                              value={oauthAuthCode}
-                              onChange={e => setOauthAuthCode(e.target.value)}
-                              placeholder="粘贴授权码…"
-                              className="h-9 text-sm font-mono"
-                              disabled={exchangeOAuthCode.isPending}
-                            />
+                          <div className="flex items-center gap-3 p-2 bg-muted rounded-md">
+                            <span className="text-lg font-mono font-bold tracking-widest">{oauthUserCode}</span>
                             <Button
                               size="sm"
-                              className="h-9 shrink-0"
-                              disabled={!oauthAuthCode.trim() || exchangeOAuthCode.isPending}
-                              onClick={() => exchangeOAuthCode.mutate(oauthAuthCode.trim())}
+                              variant="ghost"
+                              className="h-7 text-xs"
+                              onClick={() => { navigator.clipboard.writeText(oauthUserCode); toast.success('已复制') }}
                             >
-                              {exchangeOAuthCode.isPending ? '验证中…' : '提交'}
+                              复制
                             </Button>
                           </div>
+                          <p className="text-[10px] text-muted-foreground">
+                            等待授权中… 已等待 {oauthPollCount * 5}s / 120s
+                            {oauthVerificationUri && (
+                              <>
+                                {' '}<a href={oauthVerificationUri} target="_blank" rel="noopener noreferrer" className="underline">重新打开验证页面</a>
+                              </>
+                            )}
+                          </p>
                         </div>
                       )}
                       <p className="text-[10px] text-muted-foreground">
-                        Outlook 使用 Microsoft OAuth API 授权，无需输入密码。点击「去授权」后将弹出 Microsoft 登录窗口。
+                        Outlook 使用 Microsoft 设备码授权，无需输入密码。点击「去授权」后将弹出 Microsoft 验证页面。
                       </p>
                     </div>
                     {oauthOutlookAuthorized && (
